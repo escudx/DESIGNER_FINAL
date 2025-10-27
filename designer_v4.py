@@ -14,7 +14,7 @@ Designer de Campos — Fluxos [v3.0] - INTEGRADO COM IMPORTADOR BPMN
 """
 
 from __future__ import annotations
-import os, re, uuid, json, datetime, sys, traceback, tkinter as tk
+import os, re, uuid, json, datetime, sys, traceback, tkinter as tk, unicodedata
 # Imports adicionados para o importador de BPMN
 import io
 import zipfile
@@ -282,8 +282,11 @@ def build_task_fields_for_diagram(nodes, transitions):
     for gw in [n for n in nodes.values() if n["type"] == "Route"]:
         incoming, outgoing = in_by.get(gw["id"], []), out_by.get(gw["id"], [])
         opts = [t["name"] for t in outgoing if t.get("name")]
-        if not opts and len(outgoing) == 2: opts = ["Sim", "Não"]
-        elif not opts and len(outgoing) > 0: opts = [nodes.get(t["to"], {}).get("name", "") for t in outgoing]
+        if not opts and outgoing:
+            opts = [nodes.get(t["to"], {}).get("name", "") for t in outgoing]
+            opts = [o for o in opts if o]
+        if not opts and len(outgoing) == 2:
+            opts = ["Sim", "Não"]
         
         tipo = "Lista"
         if set(o.lower() for o in opts) in [{"sim", "não"}, {"sim", "nao"}]:
@@ -3217,6 +3220,24 @@ class App(ctk.CTk):
             parts.append(f"{base_name or f'[id {c.src_field}]'} {c.op} {c.value!r}")
         return " OU ".join(parts)
 
+    def _format_field_subtype(self, field: Field) -> str:
+        if field.ftype in LIST_FIELD_TYPES and field.options:
+            return f"Opções: {field.options}"
+        if field.ftype == "Informativo" and field.options:
+            return f"Texto: {field.options}"
+        if field.ftype == "Objeto":
+            return f"Objeto: {self.project.object_type or '-'}"
+        return field.ftype
+
+    def _overview_xlsx_initial_name(self) -> str:
+        base = self.project.flow_name or "Fluxo"
+        normalized = unicodedata.normalize("NFKD", base)
+        ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+        safe = re.sub(r"[^A-Za-z0-9]+", "_", ascii_name).strip("_")
+        if not safe:
+            safe = "Fluxo"
+        return f"Campos_{safe}.xlsx"
+
     def _cond_summary(self, f: Field) -> str:
         t = self._get_task()
         if not t: return "Sem regras"
@@ -3438,11 +3459,7 @@ class App(ctk.CTk):
             for f in t.fields:
                 origem = f"{self._get_task_name(f.origin_task)} › {self._get_field_name(f.origin_field)}" if (f.origin_task and f.origin_field) else ""
                 regras = self._cond_summary_for_task(t, f)
-                subtipo = f.ftype
-                if f.ftype in LIST_FIELD_TYPES and f.options:
-                    subtipo = f"{f.ftype}: " + f.options
-                if f.ftype == "Informativo" and f.options: subtipo = f"Informativo: " + f.options
-                if f.ftype == "Objeto": subtipo = f"Objeto: " + (self.project.object_type or "-")
+                subtipo = self._format_field_subtype(f)
                 
                 row_data = [f.name, f.ftype, origem, regras,
                        "Sim" if f.required else "Não", "Sim" if f.readonly else "Não", subtipo, f.note or ""]
@@ -3456,10 +3473,11 @@ class App(ctk.CTk):
         css = '''
         <style>
           :root { color-scheme: dark; }
-          body { background:#0f1012; color:#e6e6e6; font-family:Segoe UI, Arial, sans-serif; margin:0; }
+          html, body { background:#0f1012; color:#e6e6e6; font-family:Segoe UI, Arial, sans-serif; margin:0; min-height:100%; }
+          body { display:flex; flex-direction:column; }
           .toolbar { position:sticky; top:0; background:#121416; padding:8px 12px; z-index:2; border-bottom:1px solid #1e2126; }
-          .wrap { padding: 8px 12px; }
-          .table-container { overflow:auto; border:1px solid #1e2126; border-radius:8px; }
+          .wrap { flex:1; padding: 8px 12px 16px; box-sizing:border-box; }
+          .table-container { overflow:auto; border:1px solid #1e2126; border-radius:8px; background:#0f1012; }
           table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; }
           thead th { position:sticky; top:0; background:#1b1d22; color:#cbd5e1; text-align:left; padding:10px; font-weight:600; border-bottom:1px solid #2a2f37; }
           tbody td { padding:10px; border-bottom:1px solid #1e2126; vertical-align:top; word-wrap:break-word; overflow-wrap:break-word; }
@@ -3573,6 +3591,23 @@ class App(ctk.CTk):
         frame.grid_columnconfigure(0, weight=1); frame.grid_rowconfigure(0, weight=1)
         viewer = HtmlFrame(frame, messages_enabled=False); viewer.grid(row=0, column=0, sticky="nsew")
 
+        def _apply_dark_backdrop(widget: tk.Misc, color: str) -> None:
+            """Remove artefatos claros ajustando o fundo do HtmlFrame e filhos."""
+            _safe_configure(
+                widget,
+                background=color,
+                bg=color,
+                highlightbackground=color,
+                highlightcolor=color,
+                highlightthickness=0,
+                borderwidth=0,
+                relief="flat",
+            )
+            for child in widget.winfo_children():
+                _apply_dark_backdrop(child, color)
+
+        _apply_dark_backdrop(viewer, DARK_BG2)
+
         def render():
             html = self._build_overview_html(e_search.get(), self._html_overview_collapsed)
             try: viewer.load_html(html)
@@ -3627,7 +3662,8 @@ class App(ctk.CTk):
             from openpyxl.utils import get_column_letter
         except Exception:
             messagebox.showwarning("Exportar XLSX", "Instale openpyxl. Ex.: py -m pip install openpyxl"); return
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel","*.xlsx")], initialfile="visao_geral.xlsx")
+        initial = self._overview_xlsx_initial_name()
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel","*.xlsx")], initialfile=initial)
         if not path: return
 
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Visão geral"
@@ -3644,11 +3680,7 @@ class App(ctk.CTk):
             for f in t.fields:
                 origem = f"{self._get_task_name(f.origin_task)} › {self._get_field_name(f.origin_field)}" if (f.origin_task and f.origin_field) else ""
                 regras = self._cond_summary_for_task(t, f)
-                subtipo = f.ftype
-                if f.ftype in LIST_FIELD_TYPES and f.options:
-                    subtipo = f"{f.ftype}: " + f.options
-                if f.ftype == "Informativo" and f.options: subtipo = f"Informativo: " + f.options
-                if f.ftype == "Objeto": subtipo = f"Objeto: " + (self.project.object_type or "-")
+                subtipo = self._format_field_subtype(f)
                 row = [t.name, f.name, f.ftype, origem, regras, "Sim" if f.required else "Não", "Sim" if f.readonly else "Não", subtipo, f.note or ""]
                 
                 if not query or any(query in (c or "").lower() for c in row):
@@ -4691,6 +4723,7 @@ class App(ctk.CTk):
 
             self.project = project
             self.answers: Dict[str, Any] = {}
+            self.controller_field_ids: Set[str] = self._collect_controller_fields()
             top = ctk.CTkFrame(self, fg_color="transparent"); top.pack(side="top", fill="x", padx=10, pady=8)
             ctk.CTkLabel(top, text="Tarefa:").pack(side="left", padx=(0, 6))
 
@@ -4716,12 +4749,30 @@ class App(ctk.CTk):
             self.body = ctk.CTkScrollableFrame(self); self.body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
             self._render()
 
+        def _collect_controller_fields(self) -> Set[str]:
+            controllers: Set[str] = set()
+            try:
+                for task in self.project.tasks:
+                    for field in task.fields:
+                        for cond in getattr(field, "cond", []) or []:
+                            src = getattr(cond, "src_field", None)
+                            if src:
+                                controllers.add(src)
+            except Exception:
+                pass
+            return controllers
+
+        def _maybe_rerender(self, field_id: Optional[str]) -> None:
+            if field_id and field_id in self.controller_field_ids:
+                self._render()
+
         def _center_toplevel(self, win, width, height):
             if hasattr(self.master, "_center_toplevel"):
                 self.master._center_toplevel(win, width, height)
 
         def on_model_changed(self):
             current_ids: Set[str] = {f.id for t in self.project.tasks for f in t.fields}
+            self.controller_field_ids = self._collect_controller_fields()
 
             new_answers: Dict[str, Any] = {}
             for k, v in self.answers.items():
@@ -4853,7 +4904,7 @@ class App(ctk.CTk):
                     state["values"] = values
                     commit_answers()
                     update_styles()
-                    self._render()
+                    self._maybe_rerender(answer_key)
                     return "break"
 
                 for idx, opt in enumerate(options):
@@ -4909,7 +4960,7 @@ class App(ctk.CTk):
                                         self.answers.pop(fid, None)
                                     else:
                                         self.answers[fid] = value
-                                    self._render()
+                                    self._maybe_rerender(fid)
 
                                 om = ctk.CTkOptionMenu(
                                     row,
@@ -5029,7 +5080,7 @@ class App(ctk.CTk):
                                 return
                             var.set(formatted)
                             self.answers[fid] = formatted
-                            self._render()
+                            self._maybe_rerender(fid)
 
                         ent.bind("<FocusOut>", on_date_focus_out)
 
@@ -5051,7 +5102,7 @@ class App(ctk.CTk):
                         comp_frame = ctk.CTkFrame(row, fg_color="#222222", corner_radius=6); comp_frame.pack(side="left", padx=4, fill="x", expand=True)
                         ctk.CTkLabel(comp_frame, text=f.note or "Simular valor de saída do componente", anchor="w").pack(padx=8, pady=(6, 2), anchor="w")
                         ent = ctk.CTkEntry(comp_frame); ent.insert(0, self.answers.get(f.id, "")); ent.pack(fill="x", padx=8, pady=(0, 6))
-                        ent.bind("<FocusOut>", lambda e, fid=f.id, w=ent: (self.answers.__setitem__(fid, w.get()), self._render()))
+                        ent.bind("<FocusOut>", lambda e, fid=f.id, w=ent: (self.answers.__setitem__(fid, w.get()), self._maybe_rerender(fid)))
 
                     elif f.ftype == "Objeto":
                         obj_box = ctk.CTkFrame(row, fg_color="#222222", corner_radius=6); obj_box.pack(side="left", padx=4, fill="x", expand=True)
@@ -5083,7 +5134,7 @@ class App(ctk.CTk):
                                                     self.answers.pop(skey, None)
                                                 else:
                                                     self.answers[skey] = value
-                                                self._render()
+                                                self._maybe_rerender(skey)
 
                                             om = ctk.CTkOptionMenu(
                                                 sub_row,
@@ -5094,7 +5145,7 @@ class App(ctk.CTk):
                                             om.pack(side="left", fill="x", expand=True)
                                 else:
                                     ent = ctk.CTkEntry(sub_row); ent.insert(0, self.answers.get(sub_key, "")); ent.pack(side="left", fill="x", expand=True)
-                                    ent.bind("<FocusOut>", lambda e, skey=sub_key, w=ent: (self.answers.__setitem__(skey, w.get()), self._render()))
+                                    ent.bind("<FocusOut>", lambda e, skey=sub_key, w=ent: (self.answers.__setitem__(skey, w.get()), self._maybe_rerender(skey)))
 
                         if not self.project.object_schema: ctk.CTkLabel(obj_box, text="Conteúdo mapeado externamente (sem esquema).", anchor="w").pack(padx=8, pady=(0, 6))
                         elif all(ofd.readonly for ofd in self.project.object_schema): ctk.CTkLabel(obj_box, text="Todos os campos do Objeto são 'Só Leitura'.", anchor="w").pack(padx=8, pady=(0, 6))
