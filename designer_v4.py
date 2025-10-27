@@ -3459,10 +3459,11 @@ class App(ctk.CTk):
         css = '''
         <style>
           :root { color-scheme: dark; }
-          body { background:#0f1012; color:#e6e6e6; font-family:Segoe UI, Arial, sans-serif; margin:0; }
+          html, body { background:#0f1012; color:#e6e6e6; font-family:Segoe UI, Arial, sans-serif; margin:0; min-height:100%; }
+          body { display:flex; flex-direction:column; }
           .toolbar { position:sticky; top:0; background:#121416; padding:8px 12px; z-index:2; border-bottom:1px solid #1e2126; }
-          .wrap { padding: 8px 12px; }
-          .table-container { overflow:auto; border:1px solid #1e2126; border-radius:8px; }
+          .wrap { flex:1; padding: 8px 12px 16px; box-sizing:border-box; }
+          .table-container { overflow:auto; border:1px solid #1e2126; border-radius:8px; background:#0f1012; }
           table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; }
           thead th { position:sticky; top:0; background:#1b1d22; color:#cbd5e1; text-align:left; padding:10px; font-weight:600; border-bottom:1px solid #2a2f37; }
           tbody td { padding:10px; border-bottom:1px solid #1e2126; vertical-align:top; word-wrap:break-word; overflow-wrap:break-word; }
@@ -3575,13 +3576,23 @@ class App(ctk.CTk):
         frame = ctk.CTkFrame(win, fg_color="transparent"); frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0,10))
         frame.grid_columnconfigure(0, weight=1); frame.grid_rowconfigure(0, weight=1)
         viewer = HtmlFrame(frame, messages_enabled=False); viewer.grid(row=0, column=0, sticky="nsew")
-        try:
-            viewer.configure(background=DARK_BG2)
-        except Exception:
-            try:
-                viewer.configure(bg=DARK_BG2)
-            except Exception:
-                pass
+
+        def _apply_dark_backdrop(widget: tk.Misc, color: str) -> None:
+            """Remove artefatos claros ajustando o fundo do HtmlFrame e filhos."""
+            _safe_configure(
+                widget,
+                background=color,
+                bg=color,
+                highlightbackground=color,
+                highlightcolor=color,
+                highlightthickness=0,
+                borderwidth=0,
+                relief="flat",
+            )
+            for child in widget.winfo_children():
+                _apply_dark_backdrop(child, color)
+
+        _apply_dark_backdrop(viewer, DARK_BG2)
 
         def render():
             html = self._build_overview_html(e_search.get(), self._html_overview_collapsed)
