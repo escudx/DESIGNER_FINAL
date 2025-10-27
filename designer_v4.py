@@ -3574,7 +3574,14 @@ class App(ctk.CTk):
 
         frame = ctk.CTkFrame(win, fg_color="transparent"); frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0,10))
         frame.grid_columnconfigure(0, weight=1); frame.grid_rowconfigure(0, weight=1)
-        viewer = HtmlFrame(frame, messages_enabled=False, background=DARK_BG2); viewer.grid(row=0, column=0, sticky="nsew")
+        viewer = HtmlFrame(frame, messages_enabled=False); viewer.grid(row=0, column=0, sticky="nsew")
+        try:
+            viewer.configure(background=DARK_BG2)
+        except Exception:
+            try:
+                viewer.configure(bg=DARK_BG2)
+            except Exception:
+                pass
 
         def render():
             html = self._build_overview_html(e_search.get(), self._html_overview_collapsed)
