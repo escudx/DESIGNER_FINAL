@@ -282,8 +282,11 @@ def build_task_fields_for_diagram(nodes, transitions):
     for gw in [n for n in nodes.values() if n["type"] == "Route"]:
         incoming, outgoing = in_by.get(gw["id"], []), out_by.get(gw["id"], [])
         opts = [t["name"] for t in outgoing if t.get("name")]
-        if not opts and len(outgoing) == 2: opts = ["Sim", "Não"]
-        elif not opts and len(outgoing) > 0: opts = [nodes.get(t["to"], {}).get("name", "") for t in outgoing]
+        if not opts and outgoing:
+            opts = [nodes.get(t["to"], {}).get("name", "") for t in outgoing]
+            opts = [o for o in opts if o]
+        if not opts and len(outgoing) == 2:
+            opts = ["Sim", "Não"]
         
         tipo = "Lista"
         if set(o.lower() for o in opts) in [{"sim", "não"}, {"sim", "nao"}]:
@@ -3571,7 +3574,7 @@ class App(ctk.CTk):
 
         frame = ctk.CTkFrame(win, fg_color="transparent"); frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0,10))
         frame.grid_columnconfigure(0, weight=1); frame.grid_rowconfigure(0, weight=1)
-        viewer = HtmlFrame(frame, messages_enabled=False); viewer.grid(row=0, column=0, sticky="nsew")
+        viewer = HtmlFrame(frame, messages_enabled=False, background=DARK_BG2); viewer.grid(row=0, column=0, sticky="nsew")
 
         def render():
             html = self._build_overview_html(e_search.get(), self._html_overview_collapsed)
@@ -4691,6 +4694,7 @@ class App(ctk.CTk):
 
             self.project = project
             self.answers: Dict[str, Any] = {}
+            self.controller_field_ids: Set[str] = self._collect_controller_fields()
             top = ctk.CTkFrame(self, fg_color="transparent"); top.pack(side="top", fill="x", padx=10, pady=8)
             ctk.CTkLabel(top, text="Tarefa:").pack(side="left", padx=(0, 6))
 
@@ -4716,12 +4720,30 @@ class App(ctk.CTk):
             self.body = ctk.CTkScrollableFrame(self); self.body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
             self._render()
 
+        def _collect_controller_fields(self) -> Set[str]:
+            controllers: Set[str] = set()
+            try:
+                for task in self.project.tasks:
+                    for field in task.fields:
+                        for cond in getattr(field, "cond", []) or []:
+                            src = getattr(cond, "src_field", None)
+                            if src:
+                                controllers.add(src)
+            except Exception:
+                pass
+            return controllers
+
+        def _maybe_rerender(self, field_id: Optional[str]) -> None:
+            if field_id and field_id in self.controller_field_ids:
+                self._render()
+
         def _center_toplevel(self, win, width, height):
             if hasattr(self.master, "_center_toplevel"):
                 self.master._center_toplevel(win, width, height)
 
         def on_model_changed(self):
             current_ids: Set[str] = {f.id for t in self.project.tasks for f in t.fields}
+            self.controller_field_ids = self._collect_controller_fields()
 
             new_answers: Dict[str, Any] = {}
             for k, v in self.answers.items():
@@ -4853,7 +4875,7 @@ class App(ctk.CTk):
                     state["values"] = values
                     commit_answers()
                     update_styles()
-                    self._render()
+                    self._maybe_rerender(answer_key)
                     return "break"
 
                 for idx, opt in enumerate(options):
@@ -4909,7 +4931,7 @@ class App(ctk.CTk):
                                         self.answers.pop(fid, None)
                                     else:
                                         self.answers[fid] = value
-                                    self._render()
+                                    self._maybe_rerender(fid)
 
                                 om = ctk.CTkOptionMenu(
                                     row,
@@ -5029,7 +5051,7 @@ class App(ctk.CTk):
                                 return
                             var.set(formatted)
                             self.answers[fid] = formatted
-                            self._render()
+                            self._maybe_rerender(fid)
 
                         ent.bind("<FocusOut>", on_date_focus_out)
 
@@ -5051,7 +5073,7 @@ class App(ctk.CTk):
                         comp_frame = ctk.CTkFrame(row, fg_color="#222222", corner_radius=6); comp_frame.pack(side="left", padx=4, fill="x", expand=True)
                         ctk.CTkLabel(comp_frame, text=f.note or "Simular valor de saída do componente", anchor="w").pack(padx=8, pady=(6, 2), anchor="w")
                         ent = ctk.CTkEntry(comp_frame); ent.insert(0, self.answers.get(f.id, "")); ent.pack(fill="x", padx=8, pady=(0, 6))
-                        ent.bind("<FocusOut>", lambda e, fid=f.id, w=ent: (self.answers.__setitem__(fid, w.get()), self._render()))
+                        ent.bind("<FocusOut>", lambda e, fid=f.id, w=ent: (self.answers.__setitem__(fid, w.get()), self._maybe_rerender(fid)))
 
                     elif f.ftype == "Objeto":
                         obj_box = ctk.CTkFrame(row, fg_color="#222222", corner_radius=6); obj_box.pack(side="left", padx=4, fill="x", expand=True)
@@ -5083,7 +5105,7 @@ class App(ctk.CTk):
                                                     self.answers.pop(skey, None)
                                                 else:
                                                     self.answers[skey] = value
-                                                self._render()
+                                                self._maybe_rerender(skey)
 
                                             om = ctk.CTkOptionMenu(
                                                 sub_row,
@@ -5094,7 +5116,7 @@ class App(ctk.CTk):
                                             om.pack(side="left", fill="x", expand=True)
                                 else:
                                     ent = ctk.CTkEntry(sub_row); ent.insert(0, self.answers.get(sub_key, "")); ent.pack(side="left", fill="x", expand=True)
-                                    ent.bind("<FocusOut>", lambda e, skey=sub_key, w=ent: (self.answers.__setitem__(skey, w.get()), self._render()))
+                                    ent.bind("<FocusOut>", lambda e, skey=sub_key, w=ent: (self.answers.__setitem__(skey, w.get()), self._maybe_rerender(skey)))
 
                         if not self.project.object_schema: ctk.CTkLabel(obj_box, text="Conteúdo mapeado externamente (sem esquema).", anchor="w").pack(padx=8, pady=(0, 6))
                         elif all(ofd.readonly for ofd in self.project.object_schema): ctk.CTkLabel(obj_box, text="Todos os campos do Objeto são 'Só Leitura'.", anchor="w").pack(padx=8, pady=(0, 6))
