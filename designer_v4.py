@@ -14,7 +14,7 @@ Designer de Campos — Fluxos [v3.0] - INTEGRADO COM IMPORTADOR BPMN
 """
 
 from __future__ import annotations
-import os, re, uuid, json, datetime, sys, traceback, tkinter as tk
+import os, re, uuid, json, datetime, sys, traceback, tkinter as tk, unicodedata
 # Imports adicionados para o importador de BPMN
 import io
 import zipfile
@@ -3220,6 +3220,24 @@ class App(ctk.CTk):
             parts.append(f"{base_name or f'[id {c.src_field}]'} {c.op} {c.value!r}")
         return " OU ".join(parts)
 
+    def _format_field_subtype(self, field: Field) -> str:
+        if field.ftype in LIST_FIELD_TYPES and field.options:
+            return f"Opções: {field.options}"
+        if field.ftype == "Informativo" and field.options:
+            return f"Texto: {field.options}"
+        if field.ftype == "Objeto":
+            return f"Objeto: {self.project.object_type or '-'}"
+        return field.ftype
+
+    def _overview_xlsx_initial_name(self) -> str:
+        base = self.project.flow_name or "Fluxo"
+        normalized = unicodedata.normalize("NFKD", base)
+        ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+        safe = re.sub(r"[^A-Za-z0-9]+", "_", ascii_name).strip("_")
+        if not safe:
+            safe = "Fluxo"
+        return f"Campos_{safe}.xlsx"
+
     def _cond_summary(self, f: Field) -> str:
         t = self._get_task()
         if not t: return "Sem regras"
@@ -3441,11 +3459,7 @@ class App(ctk.CTk):
             for f in t.fields:
                 origem = f"{self._get_task_name(f.origin_task)} › {self._get_field_name(f.origin_field)}" if (f.origin_task and f.origin_field) else ""
                 regras = self._cond_summary_for_task(t, f)
-                subtipo = f.ftype
-                if f.ftype in LIST_FIELD_TYPES and f.options:
-                    subtipo = f"{f.ftype}: " + f.options
-                if f.ftype == "Informativo" and f.options: subtipo = f"Informativo: " + f.options
-                if f.ftype == "Objeto": subtipo = f"Objeto: " + (self.project.object_type or "-")
+                subtipo = self._format_field_subtype(f)
                 
                 row_data = [f.name, f.ftype, origem, regras,
                        "Sim" if f.required else "Não", "Sim" if f.readonly else "Não", subtipo, f.note or ""]
@@ -3648,7 +3662,8 @@ class App(ctk.CTk):
             from openpyxl.utils import get_column_letter
         except Exception:
             messagebox.showwarning("Exportar XLSX", "Instale openpyxl. Ex.: py -m pip install openpyxl"); return
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel","*.xlsx")], initialfile="visao_geral.xlsx")
+        initial = self._overview_xlsx_initial_name()
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel","*.xlsx")], initialfile=initial)
         if not path: return
 
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Visão geral"
@@ -3665,11 +3680,7 @@ class App(ctk.CTk):
             for f in t.fields:
                 origem = f"{self._get_task_name(f.origin_task)} › {self._get_field_name(f.origin_field)}" if (f.origin_task and f.origin_field) else ""
                 regras = self._cond_summary_for_task(t, f)
-                subtipo = f.ftype
-                if f.ftype in LIST_FIELD_TYPES and f.options:
-                    subtipo = f"{f.ftype}: " + f.options
-                if f.ftype == "Informativo" and f.options: subtipo = f"Informativo: " + f.options
-                if f.ftype == "Objeto": subtipo = f"Objeto: " + (self.project.object_type or "-")
+                subtipo = self._format_field_subtype(f)
                 row = [t.name, f.name, f.ftype, origem, regras, "Sim" if f.required else "Não", "Sim" if f.readonly else "Não", subtipo, f.note or ""]
                 
                 if not query or any(query in (c or "").lower() for c in row):
