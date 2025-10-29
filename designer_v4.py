@@ -3428,15 +3428,14 @@ class App(ctk.CTk):
         match = re.search(pattern, field.note)
         initial_content = match.group(1) if match else ""
 
-        new_content = self._prompt_text(
-            "Tipos de Documento para Anexo",
-            "Tipos permitidos (separados por ';'), ou deixe em branco:",
-            initial_content
-        )
-        if new_content is None: return # Usuário cancelou
-        
+        new_content = self._prompt_attachment_types(initial_content)
+        if new_content is None:
+            return  # Usuário cancelou
+
+        normalized_content = new_content.strip()
+
         self._push_undo()
-        new_tag = f"[Tipo de Doc.: {new_content.strip()}]" if new_content.strip() else ""
+        new_tag = f"[Tipo de Doc.: {normalized_content}]" if normalized_content else ""
 
         if match: # Tag já existe
             if not new_tag: # Novo conteúdo está vazio, remove a tag antiga
@@ -3447,6 +3446,90 @@ class App(ctk.CTk):
             field.note = (new_tag + " " + field.note).strip()
         
         self._refresh_rows()
+
+    def _prompt_attachment_types(self, initial: str) -> Optional[str]:
+        sem_limitation_label = "Sem Limitação"
+        initial_clean = (initial or "").strip()
+        sem_lim_initial = initial_clean.lower() == sem_limitation_label.lower()
+
+        win = ctk.CTkToplevel(self)
+        win.title("Tipos de Documento para Anexo")
+        win.transient(self)
+        self._center_toplevel(win, 520, 210)
+        win.grab_set()
+
+        container = ctk.CTkFrame(win, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=18, pady=16)
+
+        ctk.CTkLabel(
+            container,
+            text=(
+                "Informe os tipos permitidos separados por ';' ou marque "
+                "'Sem Limitação' para aceitar qualquer documento."
+            ),
+            justify="left",
+            anchor="w",
+            wraplength=460,
+        ).pack(fill="x")
+
+        input_row = ctk.CTkFrame(container, fg_color="transparent")
+        input_row.pack(fill="x", pady=(12, 0))
+
+        var_sem_lim = tk.BooleanVar(value=sem_lim_initial)
+
+        entry = ctk.CTkEntry(input_row)
+        entry.pack(side="right", fill="x", expand=True)
+        if not sem_lim_initial:
+            entry.insert(0, initial_clean)
+
+        def toggle_state() -> None:
+            if var_sem_lim.get():
+                entry.delete(0, tk.END)
+                entry.configure(state="disabled")
+            else:
+                entry.configure(state="normal")
+                entry.focus_set()
+
+        chk = ctk.CTkCheckBox(
+            input_row,
+            text=sem_limitation_label,
+            variable=var_sem_lim,
+            command=toggle_state,
+        )
+        chk.pack(side="left", padx=(0, 12))
+
+        toggle_state()
+
+        output: Dict[str, Optional[str]] = {"value": None}
+
+        def finish(ok: bool) -> None:
+            if ok:
+                if var_sem_lim.get():
+                    output["value"] = sem_limitation_label
+                else:
+                    output["value"] = entry.get() if entry.get() is not None else ""
+            else:
+                output["value"] = None
+            win.destroy()
+
+        buttons = ctk.CTkFrame(container, fg_color="transparent")
+        buttons.pack(fill="x", pady=18)
+
+        ctk.CTkButton(buttons, text="OK", width=140, command=lambda: finish(True)).pack(side="left")
+        btn_cancel = ctk.CTkButton(buttons, text="Cancelar", width=140, command=lambda: finish(False))
+        _apply_secondary_style(btn_cancel)
+        btn_cancel.pack(side="left", padx=(12, 0))
+
+        entry.bind("<Return>", lambda _event: finish(True))
+        win.bind("<Escape>", lambda _event: finish(False))
+
+        if not var_sem_lim.get():
+            entry.focus_set()
+        else:
+            chk.focus_set()
+
+        self.wait_window(win)
+        return output["value"]
         
     # ===== Visão Planilha (HTML) =====
     def _build_overview_html(self, query: str, collapsed: Set[str]) -> str:
@@ -4718,7 +4801,7 @@ class App(ctk.CTk):
             self.master = master
             self.title("Simulador de Workflow")
             self.transient(master)  # Fix para múltiplos monitores
-            self._center_toplevel(self, 900, 600)
+            self._center_toplevel(self, 900, 600, respect_req_size=False)
             self.grab_set()
 
             self.project = project
@@ -4766,9 +4849,9 @@ class App(ctk.CTk):
             if field_id and field_id in self.controller_field_ids:
                 self._render()
 
-        def _center_toplevel(self, win, width, height):
+        def _center_toplevel(self, win, width, height, *, respect_req_size: bool = True):
             if hasattr(self.master, "_center_toplevel"):
-                self.master._center_toplevel(win, width, height)
+                self.master._center_toplevel(win, width, height, respect_req_size=respect_req_size)
 
         def on_model_changed(self):
             current_ids: Set[str] = {f.id for t in self.project.tasks for f in t.fields}
@@ -5206,6 +5289,7 @@ class App(ctk.CTk):
         *,
         transient: bool = True,
         fade: bool = True,
+        respect_req_size: bool = True,
     ):
         # A ordem aqui é crucial: transient() deve vir antes de geometry()
         if transient and win is not self:
@@ -5224,7 +5308,7 @@ class App(ctk.CTk):
             pass
 
         def _finalize() -> None:
-            self._finalize_toplevel_position(win, width, height, fade)
+            self._finalize_toplevel_position(win, width, height, fade, respect_req_size)
 
         try:
             win.after(30, _finalize)
@@ -5237,6 +5321,7 @@ class App(ctk.CTk):
         width: int,
         height: int,
         fade: bool,
+        respect_req_size: bool,
     ) -> None:
         if not win.winfo_exists():
             return
@@ -5251,8 +5336,9 @@ class App(ctk.CTk):
 
             required_w = win.winfo_reqwidth()
             required_h = win.winfo_reqheight()
-            width = max(width, required_w)
-            height = max(height, required_h)
+            if respect_req_size:
+                width = max(width, required_w)
+                height = max(height, required_h)
 
             current_w = win.winfo_width()
             current_h = win.winfo_height()
